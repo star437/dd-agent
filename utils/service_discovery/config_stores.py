@@ -15,6 +15,8 @@ SD_TEMPLATE_DIR = '/datadog/check_configs'
 
 
 def get_config_store(agentConfig):
+    if 'sd_config_backend' not in agentConfig:
+        return None
     if agentConfig.get('sd_config_backend') == 'etcd':
         return EtcdStore(agentConfig)
     elif agentConfig.get('sd_config_backend') == 'consul':

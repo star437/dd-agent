@@ -43,6 +43,9 @@ class AbstractConfigStore(object):
         self.sd_template_dir = agentConfig.get('sd_template_dir')
         self.auto_conf_images = get_auto_conf_images(agentConfig)
 
+        # cache used by dockerutil to determine which check to reload based on the image linked to an event
+        self.image_to_checks = self._populate_image_to_checks()
+
     @classmethod
     def _drop(cls):
         """Drop the config store instance. This is only used for testing."""
@@ -60,6 +63,16 @@ class AbstractConfigStore(object):
 
     def dump_directory(self, path, **kwargs):
         raise NotImplementedError()
+
+    def _populate_image_to_checks(self):
+        images_to_checks = {}
+        templates = self.client_read(self.sd_template_dir.lstrip('/'), all=True)
+        for tpl in templates:
+            split_tpl = tpl[0].split('/')
+            image, var = split_tpl[-2], split_tpl[-1]
+            if var == CHECK_NAMES:
+                images_to_checks[image] = json.loads(tpl[1])
+        return images_to_checks
 
     def _get_auto_config(self, image_name):
         ident = self._get_image_ident(image_name)
@@ -109,6 +122,9 @@ class AbstractConfigStore(object):
                       'and instances are not all the same length. Container with identifier {} '
                       'will not be configured by the service discovery'.format(identifier))
             return []
+
+        # Update the image_to_checks cache
+        self._update_image_to_checks(identifier, check_names)
 
         for idx, c_name in enumerate(check_names):
             if trace_config:
@@ -208,8 +224,18 @@ class AbstractConfigStore(object):
             self.previous_config_index = config_index
             return False
         # Config has been modified since last crawl
+        # in this case a full config reload is triggered and the image_to_checks cache is rebuilt
         if config_index != self.previous_config_index:
-            log.info('Detected an update in config template, reloading check configs...')
+            log.info('Detected an update in config templates, reloading check configs...')
             self.previous_config_index = config_index
+            self.image_to_checks = self._populate_image_to_checks()
             return True
         return False
+
+    def _update_image_to_checks(self, image, check_names):
+        """Try to insert in the image_to_checks cache the mapping between an image and its check names"""
+        if image not in self.image_to_checks.keys():
+            self.image_to_checks[image] = check_names
+        elif self.image_to_checks[image] != check_names:
+            log.warning("Trying to cache check names for image %s but a different value is already there. "
+                        "This should not happen. Not updating." % image)
